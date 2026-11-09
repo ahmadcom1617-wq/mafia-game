@@ -1,16 +1,1 @@
-{
-  "name": "mafia-telegram-miniapp",
-  "version": "1.1.0",
-  "private": true,
-  "scripts": {
-    "start": "node start.js"
-  },
-  "engines": {
-    "node": ">=20"
-  },
-  "dependencies": {
-    "dotenv": "^16.4.5",
-    "express": "^4.21.2",
-    "socket.io": "^4.8.1"
-  }
-}
+{"name":"mafia-telegram-game","version":"1.0.0","private":true,"description":"Persian Mafia Telegram Web App with realtime rooms and WebRTC voice signaling","main":"server.js","scripts":{"start":"node server.js"},"engines":{"node":">=18"},"dependencies":{"express":"^4.21.2","socket.io":"^4.8.1","node-telegram-bot-api":"^0.66.0"}}

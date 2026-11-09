@@ -1,27 +1,41 @@
-require("dotenv").config();const express=require("express"),http=require("http"),{Server}=require("socket.io"),crypto=require("crypto");const app=express(),server=http.createServer(app),io=new Server(server);app.use(express.static("public"));app.get("/health",(_,r)=>r.json({ok:true}));const rooms=new Map(),where=new Map(),code=()=>crypto.randomBytes(3).toString("hex").toUpperCase(),clean=s=>String(s||"").trim().replace(/[<>]/g,"").slice(0,18),fa={mafia:"مافیا",godfather:"پدرخوانده",doctor:"دکتر",detective:"کارآگاه",citizen:"شهروند"};function state(r){return{code:r.code,phase:r.phase,round:r.round,players:[...r.players.values()].map(p=>({id:p.id,name:p.name,alive:p.alive,host:p.host})),deadline:r.deadline,log:r.log.slice(-15)}}function emit(r){io.to(r.code).emit("state",state(r))}function say(r,t){r.log.push(t);emit(r)}function alive(r){return[...r.players.values()].filter(p=>p.alive)}function finish(r){let a=alive(r),m=a.filter(p=>["mafia","godfather"].includes(p.role)).length;if(!m||m>=a.length-m){r.phase="ended";clearTimeout(r.timer);io.to(r.code).emit("gameOver",{winner:m?"مافیا":"شهروندان"});emit(r);return true}return false}function timer(r,ms,fn){clearTimeout(r.timer);r.deadline=Date.now()+ms;emit(r);r.timer=setTimeout(fn,ms)}function night(r){r.phase="night";r.round++;r.players.forEach(p=>{p.action=null;p.vote=null});say(r,"شب آغاز شد؛ نقش‌های ویژه اقدام کنند.");timer(r,45000,()=>resolveNight(r))}function resolveNight(r){let a=alive(r),m=a.find(p=>["mafia","godfather"].includes(p.role)&&p.action),d=a.find(p=>p.role==="doctor"&&p.action),k=a.find(p=>p.role==="detective"&&p.action),v=m&&r.players.get(m.action);if(k){let t=r.players.get(k.action);if(t)io.to(k.id).emit("private",`نتیجه بررسی ${t.name}: ${["mafia","godfather"].includes(t.role)?"مافیاست":"مافیا نیست"}`)}if(v&&v.alive&&!(d&&d.action===v.id)){v.alive=false;say(r,v.name+" در شب حذف شد.")}else say(r,"امشب کسی حذف نشد.");if(finish(r))return;r.phase="day";say(r,"روز آغاز شد؛ ۹۰ ثانیه گفت‌وگو.");timer(r,90000,()=>votePhase(r))}function votePhase(r){r.phase="vote";r.players.forEach(p=>p.vote=null);say(r,"رأی‌گیری آغاز شد.");timer(r,45000,()=>resolveVote(r))}function resolveVote(r){let c={};alive(r).forEach(p=>{if(p.vote)c[p.vote]=(c[p.vote]||0)+1});let max=Math.max(0,...Object.values(c)),w=Object.keys(c).filter(k=>c[k]===max);if(max&&w.length===1){let p=r.players.get(w[0]);if(p){p.alive=false;say(r,p.name+" حذف شد؛ نقش: "+fa[p.role])}}else say(r,"رأی مساوی شد.");if(!finish(r))night(r)}function add(s,r,n){let p={id:s.id,name:n,alive:true,host:r.players.size===0,role:null,action:null,vote:null};r.players.set(s.id,p);where.set(s.id,r.code);s.join(r.code);s.emit("joined",{code:r.code});emit(r)}
-function verifyTelegramInitData(initData) {
-  const token=process.env.BOT_TOKEN;
-  if(!token || !initData) return null;
-  const params=new URLSearchParams(initData);
-  const hash=params.get("hash");
-  if(!hash) return null;
-  params.delete("hash");
-  params.delete("signature");
-  const dataCheck=[...params.entries()].sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>`${k}=${v}`).join("\n");
-  const secret=crypto.createHmac("sha256","WebAppData").update(token).digest();
-  const calculated=crypto.createHmac("sha256",secret).update(dataCheck).digest("hex");
-  const a=Buffer.from(calculated,"hex"), b=Buffer.from(hash,"hex");
-  if(a.length!==b.length || !crypto.timingSafeEqual(a,b)) return null;
-  const authDate=Number(params.get("auth_date")||0);
-  if(!authDate || Math.abs(Date.now()/1000-authDate)>86400) return null;
-  try { return JSON.parse(params.get("user")||"{}"); } catch { return null; }
-}
-io.use((socket,next)=>{
-  if(process.env.REQUIRE_TELEGRAM_AUTH!=="true") return next();
-  const user=verifyTelegramInitData(socket.handshake.auth?.initData);
-  if(!user || !user.id) return next(new Error("ورود تلگرام معتبر نیست؛ مینی‌اپ را از داخل ربات باز کن."));
-  socket.data.telegramUser=user;
-  next();
+const express=require('express');const http=require('http');const {Server}=require('socket.io');
+const app=express(),server=http.createServer(app),io=new Server(server,{cors:{origin:true}});
+app.use(express.static('public'));app.get('/health',(req,res)=>res.json({ok:true,rooms:Object.keys(rooms).length}));
+const rooms={};const names=['شهروند','مافیا','پدرخوانده','دکتر','کارآگاه','تک‌تیرانداز','شهردار','روان‌شناس'];
+const pick=a=>a[Math.floor(Math.random()*a.length)],code=()=>Math.random().toString(36).slice(2,7).toUpperCase();
+function pub(r){return {code:r.code,phase:r.phase,deadline:r.deadline,round:r.round,players:r.players.map(p=>({id:p.id,name:p.name,alive:p.alive,host:p.id===r.host})),log:r.log.slice(-30)}}
+function send(r){io.to(r.code).emit('state',pub(r));}
+function finish(r){let alive=r.players.filter(p=>p.alive),mafia=alive.filter(p=>p.team==='مافیا').length,cit=alive.length-mafia;if(mafia===0||mafia>=cit){r.phase='ended';r.log.push(mafia===0?'شهروندان برنده شدند!':'مافیا برنده شد!');io.to(r.code).emit('gameOver',{winner:mafia===0?'شهروندان':'مافیا'});send(r);return true}return false}
+function assign(r){let ps=[...r.players];let n=ps.length;let mafiaCount=Math.max(1,Math.floor(n/4));let mafia=ps.sort(()=>Math.random()-.5).slice(0,mafiaCount);mafia.forEach((p,i)=>{p.role=i===0?'پدرخوانده':'مافیا';p.team='مافیا'});let special=['دکتر','کارآگاه','تک‌تیرانداز','شهردار','روان‌شناس'];ps.filter(p=>!mafia.includes(p)).slice(0,Math.min(special.length,n-mafiaCount)).forEach((p,i)=>{p.role=special[i];p.team='شهروند'});ps.forEach(p=>{if(!p.role){p.role='شهروند';p.team='شهروند'}io.to(p.id).emit('role',{role:p.role,team:p.team})})}
+function phase(r,p){r.phase=p;r.deadline=Date.now()+(p==='night'?45000:p==='vote'?30000:90000);r.actions={};send(r)}
+io.on('connection',s=>{
+ s.on('createRoom',d=>{let name=String(d?.name||'بازیکن').slice(0,24),c=code();rooms[c]={code:c,host:s.id,players:[{id:s.id,name,alive:true,role:null,team:null}],phase:'lobby',round:0,log:['اتاق ساخته شد.'],actions:{},deadline:null};s.join(c);s.data.room=c;s.emit('joined',{code:c});send(rooms[c])});
+ s.on('joinRoom',d=>{let c=String(d?.room||'').toUpperCase(),r=rooms[c];if(!r||r.phase!=='lobby'||r.players.length>=20)return s.emit('errorMsg','اتاق پیدا نشد یا ظرفیت تکمیل است.');if(r.players.some(p=>p.id===s.id))return;s.join(c);s.data.room=c;r.players.push({id:s.id,name:String(d?.name||'بازیکن').slice(0,24),alive:true,role:null,team:null});r.log.push((d?.name||'بازیکن')+' وارد اتاق شد.');s.emit('joined',{code:c});send(r)});
+ s.on('startGame',()=>{let r=rooms[s.data.room];if(!r||r.host!==s.id||r.phase!=='lobby')return;if(r.players.length<4)return s.emit('errorMsg','برای شروع حداقل ۴ بازیکن لازم است.');assign(r);r.log.push('بازی شروع شد. شب اول است.');phase(r,'night')});
+ s.on('action',d=>{let r=rooms[s.data.room],p=r?.players.find(x=>x.id===s.id),t=r?.players.find(x=>x.id===d?.target);if(!r||!p?.alive||r.phase!=='night'||!t?.alive)return;if(!['مافیا','پدرخوانده','دکتر','کارآگاه','تک‌تیرانداز'].includes(p.role))return s.emit('errorMsg','نقش شما در شب کنشی ندارد.');r.actions[p.id]={target:t.id,role:p.role};s.emit('private','انتخاب شما ثبت شد.')});
+ s.on('vote',d=>{let r=rooms[s.data.room],p=r?.players.find(x=>x.id===s.id),t=r?.players.find(x=>x.id===d?.target);if(!r||r.phase!=='vote'||!p?.alive||!t?.alive)return;r.actions[p.id]=t.id;s.emit('private','رأی شما ثبت شد.')});
+ s.on('chat',d=>{let r=rooms[s.data.room],p=r?.players.find(x=>x.id===s.id);if(!r||!p?.alive||!['day','lobby'].includes(r.phase))return;let text=String(d?.text||'').slice(0,300);if(text)io.to(r.code).emit('chat',{name:p.name,text})});
+ // WebRTC signaling: clients exchange offers/answers/ICE only with players in same room.
+ for(const ev of ['voice-offer','voice-answer','voice-ice'])s.on(ev,d=>{let r=rooms[s.data.room],target=r?.players.find(p=>p.id===d?.to);if(!r||!target)return;io.to(target.id).emit(ev,{from:s.id,data:d.data})});
+ s.on('disconnect',()=>{let r=rooms[s.data.room];if(!r)return;let p=r.players.find(x=>x.id===s.id);if(p){p.connected=false;r.log.push(p.name+' قطع شد.');send(r)}})
 });
-
-io.on("connection",s=>{s.on("createRoom",d=>{let n=clean(d.name || (s.data.telegramUser && [s.data.telegramUser.first_name,s.data.telegramUser.last_name].filter(Boolean).join(" ")));if(n.length<2)return s.emit("errorMsg","نام حداقل دو حرف باشد.");let c=code(),r={code:c,players:new Map(),phase:"lobby",round:0,deadline:null,log:[],timer:null};rooms.set(c,r);add(s,r,n)});s.on("joinRoom",d=>{let r=rooms.get(String(d.room||"").toUpperCase()),n=clean(d.name || (s.data.telegramUser && [s.data.telegramUser.first_name,s.data.telegramUser.last_name].filter(Boolean).join(" ")));if(n.length<2)return s.emit("errorMsg","نام حداقل دو حرف باشد.");if(!r||r.phase!=="lobby"||r.players.size>=20)return s.emit("errorMsg","اتاق در دسترس نیست.");if([...r.players.values()].some(p=>p.name.toLowerCase()===n.toLowerCase()))return s.emit("errorMsg","این نام تکراری است.");add(s,r,n)});s.on("startGame",()=>{let r=rooms.get(where.get(s.id));if(!r||![...r.players.values()].find(p=>p.id===s.id&&p.host))return;if(r.players.size<6)return s.emit("errorMsg","حداقل ۶ بازیکن لازم است.");let ps=[...r.players.values()],rs=["mafia","doctor","detective",...(ps.length>=8?["godfather"]:[])];while(rs.length<ps.length)rs.push("citizen");rs.sort(()=>Math.random()-.5);ps.forEach((p,i)=>{p.role=rs[i];p.alive=true;io.to(p.id).emit("role",{role:fa[p.role],team:["mafia","godfather"].includes(p.role)?"مافیا":"شهروند"})});say(r,"نقش‌ها توزیع شد.");night(r)});s.on("action",d=>{let r=rooms.get(where.get(s.id)),p=r&&r.players.get(s.id),t=r&&r.players.get(d.target);if(!p||!p.alive||r.phase!=="night"||!t||!t.alive||t.id===p.id||!["mafia","godfather","doctor","detective"].includes(p.role))return;p.action=t.id;s.emit("private","انتخاب ثبت شد.")});s.on("vote",d=>{let r=rooms.get(where.get(s.id)),p=r&&r.players.get(s.id),t=r&&r.players.get(d.target);if(!p||!p.alive||r.phase!=="vote"||!t||!t.alive)return;p.vote=t.id;s.emit("private","رأی ثبت شد.")});s.on("chat",d=>{let r=rooms.get(where.get(s.id)),p=r&&r.players.get(s.id),t=String(d.text||"").trim().slice(0,300);if(r&&p&&p.alive&&["day","vote"].includes(r.phase)&&t)io.to(r.code).emit("chat",{name:p.name,text:t})});s.on("disconnect",()=>{let c=where.get(s.id),r=rooms.get(c);where.delete(s.id);if(!r)return;r.players.delete(s.id);if(!r.players.size){clearTimeout(r.timer);rooms.delete(c)}else{let h=[...r.players.values()].find(p=>p.host);if(!h){h=[...r.players.values()][0];h.host=true}emit(r);if(r.phase!=="lobby"&&r.phase!=="ended")finish(r)}})});server.listen(Number(process.env.PORT)||10000,"0.0.0.0",()=>console.log(`Mafia Mini App ready on ${process.env.PORT||10000}`));
+setInterval(()=>{
+ for(const r of Object.values(rooms)){
+  if(!r.deadline||Date.now()<r.deadline) continue;
+  if(r.phase==='night'){
+   const acts=Object.values(r.actions);
+   const kill=acts.find(a=>a.role==='مافیا'||a.role==='پدرخوانده')?.target;
+   const save=acts.find(a=>a.role==='دکتر')?.target;
+   if(kill&&kill!==save){const p=r.players.find(x=>x.id===kill);if(p){p.alive=false;r.log.push(p.name+' در شب حذف شد.')}}else r.log.push('شب بدون حذف تمام شد.');
+   if(!finish(r)){r.round++;phase(r,'day')}
+  } else if(r.phase==='day'){
+   phase(r,'vote');
+  } else if(r.phase==='vote'){
+   const counts={};Object.values(r.actions).forEach(id=>counts[id]=(counts[id]||0)+1);
+   const target=Object.entries(counts).sort((a,b)=>b[1]-a[1])[0]?.[0];
+   if(target){const p=r.players.find(x=>x.id===target);if(p){p.alive=false;r.log.push(p.name+' با رأی‌گیری حذف شد.')}}
+   if(!finish(r)){r.log.push('شب بعدی شروع شد.');phase(r,'night')}
+  }
+ }
+},1000);
+const PORT=process.env.PORT||10000;server.listen(PORT,'0.0.0.0',()=>console.log('Mafia server listening on '+PORT));
