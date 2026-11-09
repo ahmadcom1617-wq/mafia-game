@@ -1,3 +1,0 @@
-const TelegramBot=require('node-telegram-bot-api');
-function startBot(){const token=process.env.BOT_TOKEN,url=process.env.WEBAPP_URL;if(!token||!url){console.log('BOT_TOKEN/WEBAPP_URL missing; web game only.');return}const bot=new TelegramBot(token,{polling:true});bot.onText(/\/start/,msg=>bot.sendMessage(msg.chat.id,'🎭 به بازی مافیای آنلاین خوش آمدی! برای ساخت اتاق یا ورود به بازی دکمه زیر را بزن.',{reply_markup:{inline_keyboard:[[{text:'🎮 ورود به بازی',web_app:{url}}]]}}));bot.onText(/\/help/,msg=>bot.sendMessage(msg.chat.id,'برای بازی روی دکمه ورود به بازی بزن. داخل صفحه می‌توانی اتاق بسازی یا با کد وارد شوی.'));bot.on('polling_error',e=>console.error('Telegram polling:',e.message));console.log('Telegram bot polling started')}
-module.exports={startBot};
